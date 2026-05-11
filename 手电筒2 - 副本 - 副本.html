@@ -1,0 +1,943 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>色彩唤醒 - 全息多轨道空间交互系统</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <!-- Google MediaPipe -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body { 
+            background-color: #09090b; 
+            color: #f4f4f5; 
+            margin: 0; 
+            overflow: hidden; 
+            font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+            touch-action: none;
+            user-select: none;
+        }
+        
+        #canvas-container { 
+            position: absolute; 
+            top: 0; left: 0;
+            width: 100vw; 
+            height: 100vh; 
+            z-index: 1;
+        }
+        
+        #output_canvas { 
+            width: 100%; 
+            height: 100%; 
+            display: block;
+        }
+
+        #bottom-ui-layer { 
+            position: fixed; 
+            bottom: 0; 
+            left: 0; 
+            width: 100%; 
+            display: flex; 
+            flex-direction: column;
+            align-items: center; 
+            z-index: 10; 
+            pointer-events: none; 
+            transition: transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .ui-hidden { 
+            transform: translateY(calc(100% - 40px)); 
+        }
+
+        .immersive-btn-show {
+            opacity: 1 !important;
+            pointer-events: auto !important;
+            transform: translate(-50%, 0) scale(1) !important;
+        }
+        
+        .pointer-events-auto { pointer-events: auto; }
+        
+        .glass-panel { 
+            background: rgba(9, 9, 11, 0.7); 
+            backdrop-filter: blur(24px); 
+            -webkit-backdrop-filter: blur(24px);
+            border: 1px solid rgba(255, 255, 255, 0.08); 
+            border-bottom: none;
+            border-radius: 1.5rem 1.5rem 0 0;
+        }
+
+        #mode-indicator {
+            position: fixed;
+            top: 2rem;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 20;
+            background: rgba(9, 9, 11, 0.6);
+            backdrop-filter: blur(16px);
+            padding: 0.5rem 1.5rem;
+            border-radius: 2rem;
+            font-size: 0.875rem;
+            letter-spacing: 0.05em;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            transition: all 0.4s ease;
+            opacity: 0; 
+            pointer-events: none;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #d4d4d8;
+        }
+
+        #pip_container {
+            position: fixed;
+            top: 2rem;
+            right: 2rem;
+            width: 160px;
+            aspect-ratio: 4/3;
+            border-radius: 0.5rem;
+            overflow: hidden;
+            display: none; 
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            background: #000;
+            z-index: 30;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            transition: opacity 0.3s ease;
+        }
+        
+        #pip_canvas {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1);
+        }
+        
+        #hidden-media-container { display: none; }
+
+        #minimap-wrapper {
+            position: relative;
+            width: 220px;
+            height: 120px;
+            background: rgba(0,0,0,0.4);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 0.375rem;
+            overflow: hidden;
+            cursor: crosshair;
+        }
+        #minimap_canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+        
+        input[type=range] {
+            -webkit-appearance: none;
+            background: transparent;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 12px; width: 12px;
+            border-radius: 50%;
+            background: #ffffff;
+            cursor: pointer;
+            margin-top: -5px;
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%; height: 2px;
+            cursor: pointer;
+            background: rgba(255,255,255,0.2);
+            border-radius: 1px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="mode-indicator">
+        <span id="mode-text" class="flex items-center gap-2 font-light">
+            <i data-lucide="scan" class="w-4 h-4"></i> 寻找手部...
+        </span>
+    </div>
+
+    <!-- 悬浮唤出按钮 -->
+    <button id="floatingShowUiBtn" class="fixed bottom-8 left-1/2 -translate-x-1/2 translate-y-10 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-300 backdrop-blur-xl px-6 py-2.5 rounded-full flex items-center gap-2 border border-white/10 transition-all duration-500 shadow-2xl z-20 opacity-0 pointer-events-none scale-90 font-light text-sm tracking-wide">
+        <i data-lucide="menu" class="w-4 h-4"></i>
+        <span>呼出控制台</span>
+    </button>
+
+    <!-- 底部 UI 控制层 -->
+    <div id="bottom-ui-layer">
+        <button id="toggleUiBtn" class="pointer-events-auto h-[40px] bg-transparent hover:bg-white/5 text-zinc-400 hover:text-white backdrop-blur-xl px-8 py-2 rounded-t-xl border border-b-0 border-white/10 transition-colors flex items-center justify-center w-32 z-50">
+            <i data-lucide="chevron-down" id="toggleIcon" class="w-4 h-4 transition-transform duration-300"></i>
+        </button>
+
+        <div class="glass-panel relative w-full max-w-7xl p-8 pointer-events-auto flex flex-col lg:flex-row gap-10 items-stretch justify-between !rounded-t-none !border-t-white/10">
+            
+            <!-- 左侧：系统控制 -->
+            <div class="flex flex-col gap-6 min-w-[280px] lg:border-r lg:border-white/10 lg:pr-10">
+                <div class="flex items-center gap-3 text-zinc-100">
+                    <i data-lucide="aperture" class="w-5 h-5"></i>
+                    <h1 class="text-base font-medium tracking-widest">HOLOGRAPHIC SYSTEM</h1>
+                </div>
+                
+                <div class="flex flex-col gap-3">
+                    <div class="flex gap-3">
+                        <label class="flex-1 flex items-center justify-center gap-2 bg-white/5 hover:bg-white/10 text-zinc-300 px-4 py-3 rounded-lg cursor-pointer transition-colors border border-white/5 text-sm font-light">
+                            <i data-lucide="image" class="w-4 h-4"></i>
+                            <span>添加视觉</span>
+                            <input type="file" id="mediaUpload" accept="image/*,video/*" multiple class="hidden">
+                        </label>
+                        
+                        <label class="flex-1 flex items-center justify-center gap-2 bg-white/5 hover:bg-white/10 text-zinc-300 px-4 py-3 rounded-lg cursor-pointer transition-colors border border-white/5 text-sm font-light">
+                            <i data-lucide="music" class="w-4 h-4"></i>
+                            <span>添加听觉</span>
+                            <input type="file" id="audioUpload" accept="audio/*" multiple class="hidden">
+                        </label>
+                    </div>
+
+                    <div class="flex gap-3">
+                        <button id="startBtn" class="flex-1 flex items-center justify-center gap-2 bg-zinc-100 hover:bg-white text-zinc-900 px-4 py-3 rounded-lg transition-colors text-sm font-medium">
+                            <i data-lucide="power" class="w-4 h-4"></i>
+                            <span>启动交互</span>
+                        </button>
+                        
+                        <button id="confirmSetupBtn" class="flex-1 flex items-center justify-center gap-2 bg-transparent hover:bg-white/5 text-zinc-300 px-4 py-3 rounded-lg transition-colors border border-white/20 text-sm font-light">
+                            <i data-lucide="maximize" class="w-4 h-4"></i>
+                            <span>沉浸模式</span>
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="mt-auto flex flex-col gap-2">
+                    <p id="statusText" class="text-xs text-zinc-500 font-mono tracking-wider flex items-center gap-2">
+                        <span class="w-1.5 h-1.5 rounded-full bg-zinc-600"></span> STANDBY
+                    </p>
+                </div>
+            </div>
+
+            <!-- 中间：操作台 -->
+            <div class="flex-1 flex flex-col gap-6">
+                <div class="flex gap-8 items-center flex-1">
+                    <!-- 素材列表 -->
+                    <div class="flex flex-col w-56 h-[120px] bg-black/20 rounded-md border border-white/5 overflow-y-auto p-1.5 gap-1" id="media-list">
+                        <!-- 动态注入素材项 -->
+                    </div>
+
+                    <!-- 空间布局与控制 -->
+                    <div class="flex gap-6 items-center">
+                        <div class="flex flex-col gap-2">
+                            <span class="text-[10px] text-zinc-500 uppercase tracking-widest flex justify-between">
+                                <span>Spatial Layout</span>
+                            </span>
+                            <div id="minimap-wrapper">
+                                <canvas id="minimap_canvas"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- 深度Z轴控制 -->
+                        <div class="flex flex-col gap-3 h-full justify-center pl-2">
+                            <span class="text-[10px] text-zinc-500 uppercase tracking-widest">
+                                Depth (Z-Axis)
+                            </span>
+                            <input type="range" id="z-slider" min="0.2" max="3" step="0.1" value="1" class="w-28" disabled>
+                            <span id="z-value" class="text-xs text-zinc-300 font-mono">1.0x</span>
+                        </div>
+
+                        <!-- 新增：光圈范围调节 -->
+                        <div class="flex flex-col gap-3 h-full justify-center border-l border-white/10 pl-6">
+                            <span class="text-[10px] text-emerald-500/80 uppercase tracking-widest flex items-center gap-1">
+                                <i data-lucide="sun" class="w-3 h-3"></i> Aperture (范围)
+                            </span>
+                            <input type="range" id="aperture-slider" min="0.3" max="3" step="0.1" value="1" class="w-28">
+                            <span id="aperture-value" class="text-xs text-zinc-300 font-mono">1.0x</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 手势引导 -->
+                <div class="flex gap-6 text-xs text-zinc-400 font-light border-t border-white/5 pt-4">
+                    <div class="flex items-center gap-2">
+                        <i data-lucide="hand" class="w-4 h-4 text-zinc-200"></i>
+                        <span>张开手掌：移动光圈与播放 <strong class="text-white">(支持双手)</strong></span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <i data-lucide="navigation" class="w-4 h-4 text-zinc-200"></i>
+                        <span>握紧拳头：前后推拉缩放</span>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- 悬浮画中画 -->
+    <div id="pip_container">
+        <canvas id="pip_canvas"></canvas>
+        <div class="absolute top-2 left-2 flex items-center gap-1.5">
+            <div class="w-1.5 h-1.5 bg-white rounded-full animate-pulse"></div>
+            <span class="text-[9px] text-white/80 uppercase tracking-widest font-mono shadow-sm">Tracking</span>
+        </div>
+    </div>
+
+    <div id="canvas-container">
+        <canvas id="output_canvas"></canvas>
+    </div>
+
+    <div id="hidden-media-container">
+        <video id="input_video" autoplay playsinline></video>
+    </div>
+
+    <script>
+        const refreshIcons = () => {
+            if (typeof lucide !== 'undefined') {
+                lucide.createIcons();
+            }
+        };
+
+        document.addEventListener('DOMContentLoaded', refreshIcons);
+        window.addEventListener('load', refreshIcons);
+
+        const videoElement = document.getElementById('input_video');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const pipCanvas = document.getElementById('pip_canvas');
+        const pipCtx = pipCanvas.getContext('2d');
+        
+        // --- 新增：用于处理多光圈完美色彩融合的离线蒙版画布 ---
+        const maskCanvas = document.createElement('canvas');
+        const maskCtx = maskCanvas.getContext('2d');
+        
+        const minimapCanvas = document.getElementById('minimap_canvas');
+        const minimapCtx = minimapCanvas.getContext('2d');
+        
+        const startBtn = document.getElementById('startBtn');
+        const pipContainer = document.getElementById('pip_container');
+        const mediaListEl = document.getElementById('media-list');
+        const zSlider = document.getElementById('z-slider');
+        const zValue = document.getElementById('z-value');
+        const apertureSlider = document.getElementById('aperture-slider');
+        const apertureValue = document.getElementById('aperture-value');
+        const hiddenMediaContainer = document.getElementById('hidden-media-container');
+        const statusText = document.getElementById('statusText');
+        
+        const uiLayer = document.getElementById('bottom-ui-layer');
+        const confirmSetupBtn = document.getElementById('confirmSetupBtn');
+        const toggleUiBtn = document.getElementById('toggleUiBtn');
+        const toggleIcon = document.getElementById('toggleIcon');
+        const floatingShowUiBtn = document.getElementById('floatingShowUiBtn');
+
+        let isCameraRunning = false;
+        let handsModel = null;
+        let cameraObj = null;
+
+        // 全局状态更新：支持多个光圈点位 (双手)
+        const state = {
+            mediaItems: [],        
+            selectedId: null,      
+            targetScale: 1.0, currentScale: 1.0,
+            targetPanX: 0, currentPanX: 0,
+            targetPanY: 0, currentPanY: 0,
+            apertureMultiplier: 1.0, // 光圈尺寸全局乘数
+            
+            // 存储双手的光圈数据
+            spots: [
+                { targetRadius: 0, currentRadius: 0, targetX: 0, currentX: 0, targetY: 0, currentY: 0, autoPanX: 0.5, autoPanY: 0.5 },
+                { targetRadius: 0, currentRadius: 0, targetX: 0, currentX: 0, targetY: 0, currentY: 0, autoPanX: 0.5, autoPanY: 0.5 }
+            ],
+            isHandActive: false
+        };
+
+        const memory = { zoomActive: false, zoomStartDist: 0, zoomStartScale: 1.0 };
+
+        const getHighQualityDPR = () => Math.max(window.devicePixelRatio || 1, 2);
+
+        function resizeCanvas() {
+            const dpr = getHighQualityDPR();
+            canvasElement.width = window.innerWidth * dpr;
+            canvasElement.height = window.innerHeight * dpr;
+            
+            // 同步调整蒙版画布大小
+            maskCanvas.width = canvasElement.width;
+            maskCanvas.height = canvasElement.height;
+            
+            state.spots.forEach(spot => {
+                spot.targetX = spot.currentX = canvasElement.width / 2;
+                spot.targetY = spot.currentY = canvasElement.height / 2;
+            });
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        let isUiHidden = false;
+
+        const toggleUI = () => {
+            isUiHidden = !isUiHidden;
+            if (isUiHidden) {
+                uiLayer.classList.add('ui-hidden');
+                floatingShowUiBtn.classList.add('immersive-btn-show');
+                if(toggleIcon) toggleIcon.style.transform = 'rotate(180deg)';
+            } else {
+                uiLayer.classList.remove('ui-hidden');
+                floatingShowUiBtn.classList.remove('immersive-btn-show');
+                if(toggleIcon) toggleIcon.style.transform = 'rotate(0deg)';
+            }
+        };
+
+        toggleUiBtn.addEventListener('click', toggleUI);
+        floatingShowUiBtn.addEventListener('click', toggleUI);
+
+        confirmSetupBtn.addEventListener('click', () => {
+            if (!isUiHidden) toggleUI();
+            if (!isCameraRunning) startBtn.click(); 
+        });
+
+        let mediaIdCounter = 0;
+
+        const addMediaItem = (element, type, name) => {
+            const id = `media_${mediaIdCounter++}`;
+            let rawW = 400, rawH = 400;
+            
+            if (type === 'video') {
+                rawW = element.videoWidth; rawH = element.videoHeight;
+            } else if (type === 'image') {
+                rawW = element.width; rawH = element.height;
+            }
+            
+            const aspect = rawW / rawH;
+            let baseH = window.innerHeight;
+            if (type === 'audio') baseH = window.innerHeight * 0.3;
+            const baseW = baseH * aspect;
+
+            const newItem = {
+                id, name, element, type, baseW, baseH,
+                x: (Math.random() - 0.5) * window.innerWidth * 0.5, 
+                y: (Math.random() - 0.5) * window.innerHeight * 0.5, 
+                z: 1.0, playPromise: null, isHovered: false, rotation: 0 
+            };
+            
+            state.mediaItems.push(newItem);
+            updateMediaListUI();
+            selectMedia(id);
+        };
+
+        document.getElementById('mediaUpload').addEventListener('change', (e) => {
+            const files = Array.from(e.target.files);
+            if (!files.length) return;
+            files.forEach(file => {
+                const url = URL.createObjectURL(file);
+                if (file.type.startsWith('video/')) {
+                    const vid = document.createElement('video');
+                    vid.src = url; vid.loop = true; vid.playsInline = true; vid.preload = "auto"; 
+                    hiddenMediaContainer.appendChild(vid);
+                    vid.onloadeddata = () => { vid.currentTime = 0.1; addMediaItem(vid, 'video', file.name || "Video"); };
+                } else {
+                    const img = new Image();
+                    img.onload = () => addMediaItem(img, 'image', file.name || "Image");
+                    img.src = url;
+                }
+            });
+        });
+
+        document.getElementById('audioUpload').addEventListener('change', (e) => {
+            const files = Array.from(e.target.files);
+            if (!files.length) return;
+            files.forEach(file => {
+                const url = URL.createObjectURL(file);
+                const aud = document.createElement('audio');
+                aud.src = url; aud.loop = true; aud.autoplay = true;
+                hiddenMediaContainer.appendChild(aud);
+                aud.onloadedmetadata = () => { 
+                    addMediaItem(aud, 'audio', file.name || "Audio"); 
+                    aud.play().catch(()=>{}); 
+                };
+            });
+        });
+
+        const loadDefaultMedia = () => {
+            const vid = document.createElement('video');
+            vid.src = '完整带音乐版.mp4'; vid.loop = true; vid.playsInline = true; vid.preload = "auto"; 
+            hiddenMediaContainer.appendChild(vid);
+            vid.onloadeddata = () => {
+                vid.currentTime = 0.1; 
+                addMediaItem(vid, 'video', "Master Sequence");
+                const item = state.mediaItems[0];
+                item.x = 0; item.y = 0; item.z = 1.0;
+                updateMediaListUI();
+            };
+        };
+
+        const deleteMedia = (id) => {
+            const index = state.mediaItems.findIndex(m => m.id === id);
+            if (index > -1) {
+                const item = state.mediaItems[index];
+                if ((item.type === 'video' || item.type === 'audio') && item.element.parentNode) {
+                    item.element.pause(); item.element.removeAttribute('src'); item.element.load();
+                    item.element.parentNode.removeChild(item.element);
+                }
+                state.mediaItems.splice(index, 1);
+                if (state.selectedId === id) selectMedia(null);
+                else updateMediaListUI();
+            }
+        };
+
+        const updateMediaListUI = () => {
+            mediaListEl.innerHTML = '';
+            state.mediaItems.forEach(item => {
+                const div = document.createElement('div');
+                div.className = `px-3 py-2 rounded text-xs cursor-pointer flex items-center justify-between gap-2 border transition-all ${state.selectedId === item.id ? 'bg-white/10 border-white/20 text-white' : 'bg-transparent border-transparent text-zinc-400 hover:bg-white/5 hover:text-zinc-200'}`;
+                
+                const leftDiv = document.createElement('div');
+                leftDiv.className = 'flex items-center gap-2 truncate flex-1';
+                
+                let icon = '';
+                if (item.type === 'video') icon = '<i data-lucide="video" class="w-3.5 h-3.5 shrink-0"></i>';
+                else if (item.type === 'audio') icon = '<i data-lucide="music" class="w-3.5 h-3.5 shrink-0"></i>';
+                else icon = '<i data-lucide="image" class="w-3.5 h-3.5 shrink-0"></i>';
+                
+                leftDiv.innerHTML = `${icon} <span class="truncate tracking-wide">${item.name}</span>`;
+                leftDiv.onclick = () => selectMedia(item.id);
+
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'text-zinc-500 hover:text-white transition-colors p-1 shrink-0 rounded';
+                deleteBtn.innerHTML = '<i data-lucide="x" class="w-3 h-3"></i>';
+                deleteBtn.onclick = (e) => { e.stopPropagation(); deleteMedia(item.id); };
+
+                div.appendChild(leftDiv); div.appendChild(deleteBtn);
+                mediaListEl.appendChild(div);
+            });
+            refreshIcons(); drawMinimap();
+        };
+
+        const selectMedia = (id) => {
+            state.selectedId = id;
+            updateMediaListUI();
+            const item = state.mediaItems.find(m => m.id === id);
+            if (item) {
+                zSlider.disabled = false; zSlider.value = item.z; zValue.innerText = `${item.z.toFixed(1)}x`;
+            } else {
+                zSlider.disabled = true; zSlider.value = 1; zValue.innerText = `1.0x`;
+            }
+        };
+
+        zSlider.addEventListener('input', (e) => {
+            const item = state.mediaItems.find(m => m.id === state.selectedId);
+            if (item) { item.z = parseFloat(e.target.value); zValue.innerText = `${item.z.toFixed(1)}x`; drawMinimap(); }
+        });
+
+        // 绑定光圈范围 UI
+        apertureSlider.addEventListener('input', (e) => {
+            state.apertureMultiplier = parseFloat(e.target.value);
+            apertureValue.innerText = `${state.apertureMultiplier.toFixed(1)}x`;
+        });
+
+        // Minimap
+        const minimapState = { panX: 0, panY: 0, zoom: 0.1, isPanning: false };
+        let isDraggingMinimapItem = false, minimapLastMouseX = 0, minimapLastMouseY = 0;
+
+        const mapWorldToMinimap = (wx, wy) => {
+            const w = minimapCanvas.width; const h = minimapCanvas.height;
+            return { mx: (wx - minimapState.panX) * minimapState.zoom + w / 2, my: (wy - minimapState.panY) * minimapState.zoom + h / 2 };
+        };
+
+        const mapMinimapToWorld = (mx, my) => {
+            const w = minimapCanvas.width; const h = minimapCanvas.height;
+            return { wx: (mx - w / 2) / minimapState.zoom + minimapState.panX, wy: (my - h / 2) / minimapState.zoom + minimapState.panY };
+        };
+
+        const drawMinimap = () => {
+            const w = minimapCanvas.width = document.getElementById('minimap-wrapper').clientWidth;
+            const h = minimapCanvas.height = document.getElementById('minimap-wrapper').clientHeight;
+            minimapCtx.clearRect(0, 0, w, h);
+            
+            const {mx: cx, my: cy} = mapWorldToMinimap(0, 0);
+            minimapCtx.strokeStyle = 'rgba(255,255,255,0.05)';
+            minimapCtx.beginPath();
+            if (cx >= 0 && cx <= w) { minimapCtx.moveTo(cx, 0); minimapCtx.lineTo(cx, h); }
+            if (cy >= 0 && cy <= h) { minimapCtx.moveTo(0, cy); minimapCtx.lineTo(w, cy); }
+            minimapCtx.stroke();
+
+            [...state.mediaItems].sort((a,b)=>a.z - b.z).forEach(item => {
+                const isSelected = item.id === state.selectedId;
+                const {mx, my} = mapWorldToMinimap(item.x, item.y);
+                const mw = Math.max(8, item.baseW * item.z * minimapState.zoom * 0.05); 
+                const mh = Math.max(8, item.baseH * item.z * minimapState.zoom * 0.05);
+
+                minimapCtx.fillStyle = isSelected ? 'rgba(255, 255, 255, 0.8)' : 'rgba(255, 255, 255, 0.15)';
+                minimapCtx.strokeStyle = isSelected ? '#ffffff' : 'rgba(255,255,255,0.1)';
+                minimapCtx.lineWidth = 1;
+                
+                minimapCtx.beginPath(); minimapCtx.rect(mx - mw/2, my - mh/2, mw, mh); minimapCtx.fill(); minimapCtx.stroke();
+            });
+        };
+
+        minimapCanvas.addEventListener('wheel', (e) => {
+            if (e.altKey) {
+                e.preventDefault(); 
+                const rect = minimapCanvas.getBoundingClientRect();
+                const mx = e.clientX - rect.left; const my = e.clientY - rect.top;
+                const {wx, wy} = mapMinimapToWorld(mx, my);
+
+                if (e.deltaY < 0) minimapState.zoom *= 1.1; else minimapState.zoom /= 1.1;
+                minimapState.zoom = Math.max(0.001, Math.min(minimapState.zoom, 2.0));
+
+                const newPos = mapWorldToMinimap(wx, wy);
+                minimapState.panX += (newPos.mx - mx) / minimapState.zoom;
+                minimapState.panY += (newPos.my - my) / minimapState.zoom;
+                drawMinimap();
+            }
+        }, { passive: false });
+
+        minimapCanvas.addEventListener('mousedown', (e) => {
+            const rect = minimapCanvas.getBoundingClientRect();
+            const mx = e.clientX - rect.left; const my = e.clientY - rect.top;
+            minimapLastMouseX = mx; minimapLastMouseY = my;
+
+            let clickedItem = null;
+            const sortedItems = [...state.mediaItems].sort((a,b)=>b.z - a.z);
+            for (let item of sortedItems) {
+                const {mx: itemMx, my: itemMy} = mapWorldToMinimap(item.x, item.y);
+                const mw = Math.max(8, item.baseW * item.z * minimapState.zoom * 0.05);
+                const mh = Math.max(8, item.baseH * item.z * minimapState.zoom * 0.05);
+                if (mx >= itemMx - mw/2 && mx <= itemMx + mw/2 && my >= itemMy - mh/2 && my <= itemMy + mh/2) {
+                    clickedItem = item; break;
+                }
+            }
+
+            if (clickedItem) { selectMedia(clickedItem.id); isDraggingMinimapItem = true; } 
+            else { minimapState.isPanning = true; }
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (!isDraggingMinimapItem && !minimapState.isPanning) return;
+            const rect = minimapCanvas.getBoundingClientRect();
+            const mx = e.clientX - rect.left; const my = e.clientY - rect.top;
+
+            if (isDraggingMinimapItem && state.selectedId) {
+                const item = state.mediaItems.find(m => m.id === state.selectedId);
+                if (item) { const {wx, wy} = mapMinimapToWorld(mx, my); item.x = wx; item.y = wy; drawMinimap(); }
+            } else if (minimapState.isPanning) {
+                minimapState.panX -= (mx - minimapLastMouseX) / minimapState.zoom;
+                minimapState.panY -= (my - minimapLastMouseY) / minimapState.zoom;
+                minimapLastMouseX = mx; minimapLastMouseY = my;
+                drawMinimap();
+            }
+        });
+
+        window.addEventListener('mouseup', () => { isDraggingMinimapItem = false; minimapState.isPanning = false; });
+
+        // === AI 抓取逻辑 ===
+        async function initMediaPipe() {
+            statusText.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-white animate-pulse"></span> SYSTEM BOOTING...`;
+            refreshIcons();
+            startBtn.disabled = true;
+
+            handsModel = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+            handsModel.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.65, minTrackingConfidence: 0.65 });
+
+            handsModel.onResults((results) => {
+                pipCanvas.width = videoElement.videoWidth || 640; pipCanvas.height = videoElement.videoHeight || 480;
+                pipCtx.save(); pipCtx.clearRect(0, 0, pipCanvas.width, pipCanvas.height);
+                pipCtx.drawImage(results.image, 0, 0, pipCanvas.width, pipCanvas.height);
+                
+                if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                    document.getElementById('mode-indicator').style.opacity = '1';
+
+                    // 每次检测先清零光圈目标半径
+                    state.spots.forEach(s => s.targetRadius = 0);
+                    let spotIdx = 0; 
+                    let foundZoom = false;
+
+                    for (const lm of results.multiHandLandmarks) {
+                        const getDist = (p1, p2) => Math.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2);
+                        const wrist = lm[0];
+                        const indexUp = getDist(lm[8], wrist) > getDist(lm[5], wrist) * 1.2;
+                        const middleUp = getDist(lm[12], wrist) > getDist(lm[9], wrist) * 1.2;
+                        const ringUp = getDist(lm[16], wrist) > getDist(lm[13], wrist) * 1.2;
+                        const pinkyUp = getDist(lm[20], wrist) > getDist(lm[17], wrist) * 1.2;
+                        
+                        const upCount = [indexUp, middleUp, ringUp, pinkyUp].filter(Boolean).length;
+                        const isOpen = upCount >= 3; 
+                        const isFist = upCount === 0;
+
+                        const connStyle = {color: 'rgba(255,255,255,0.4)', lineWidth: 1.5};
+                        const markStyle = {color: 'rgba(255,255,255,0.9)', lineWidth: 0, radius: 2};
+
+                        // 支持多手张开映射至不同光圈
+                        if (isOpen && spotIdx < state.spots.length) { 
+                            const spot = state.spots[spotIdx];
+                            spot.autoPanX = 1 - lm[9].x; 
+                            spot.autoPanY = lm[9].y;
+                            const spread = Math.sqrt((lm[4].x - lm[20].x)**2 + (lm[4].y - lm[20].y)**2);
+                            // 引入 Aperture Slider 的乘数调节
+                            spot.targetRadius = (60 + spread * Math.max(canvasElement.width, canvasElement.height) * 0.16) * state.apertureMultiplier;
+                            spotIdx++;
+                        } 
+                        else if (isFist && !foundZoom) { 
+                            foundZoom = true; 
+                            
+                            // 缩放控制计算
+                            const handSize = Math.sqrt((lm[0].x - lm[9].x)**2 + (lm[0].y - lm[9].y)**2);
+                            if (!memory.zoomActive) { memory.zoomStartDist = handSize; memory.zoomStartScale = state.targetScale; }
+                            if (memory.zoomStartDist > 0.01) {
+                                let ratio = handSize / memory.zoomStartDist;
+                                ratio = 1 + (ratio - 1) * 2.5; 
+                                state.targetScale = Math.max(0.2, Math.min(memory.zoomStartScale * Math.max(0.01, ratio), 10.0));
+                            }
+                            memory.zoomActive = true;
+                        }
+                        
+                        drawConnectors(pipCtx, lm, HAND_CONNECTIONS, connStyle);
+                        drawLandmarks(pipCtx, lm, markStyle);
+                    }
+
+                    if (!foundZoom) memory.zoomActive = false;
+                    const foundReveal = spotIdx > 0;
+                    state.isHandActive = foundReveal || foundZoom;
+
+                    let modeHTML = '';
+                    if (foundReveal) modeHTML += '<span class="text-white">探索模式 ACTIVE</span>';
+                    if (foundZoom) modeHTML += (modeHTML ? '<span class="text-zinc-600 mx-3">|</span>' : '') + '<span class="text-white">深度控制 ACTIVE</span>';
+                    if (!modeHTML) modeHTML = '<span class="text-zinc-400">系统就绪，等待手势</span>';
+                    document.getElementById('mode-text').innerHTML = modeHTML;
+
+                } else {
+                    document.getElementById('mode-indicator').style.opacity = '0';
+                    state.spots.forEach(s => s.targetRadius = 0); 
+                    memory.zoomActive = false; 
+                    state.isHandActive = false;
+                }
+                pipCtx.restore();
+            });
+
+            cameraObj = new Camera(videoElement, { onFrame: async () => { await handsModel.send({image: videoElement}); }, width: 640, height: 480 });
+
+            statusText.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> ONLINE`;
+            refreshIcons(); startBtn.disabled = false;
+        }
+
+        startBtn.addEventListener('click', async () => {
+            if (!handsModel) await initMediaPipe();
+            if (!isCameraRunning) {
+                startBtn.innerHTML = `<i data-lucide="square" class="w-4 h-4"></i><span>休眠系统</span>`;
+                startBtn.className = "flex-1 flex items-center justify-center gap-2 bg-zinc-800 hover:bg-zinc-700 text-white px-4 py-3 rounded-lg transition-colors text-sm font-medium border border-white/5";
+                refreshIcons(); cameraObj.start(); pipContainer.style.display = 'block'; isCameraRunning = true;
+            } else {
+                startBtn.innerHTML = `<i data-lucide="power" class="w-4 h-4"></i><span>启动交互</span>`;
+                startBtn.className = "flex-1 flex items-center justify-center gap-2 bg-zinc-100 hover:bg-white text-zinc-900 px-4 py-3 rounded-lg transition-colors text-sm font-medium";
+                refreshIcons(); cameraObj.stop(); pipContainer.style.display = 'none'; isCameraRunning = false;
+            }
+        });
+
+        // === 渲染引擎 ===
+        function renderLoop() {
+            requestAnimationFrame(renderLoop);
+            const w = canvasElement.width; const h = canvasElement.height; const dpr = getHighQualityDPR();
+
+            if (state.mediaItems.length === 0) { canvasCtx.clearRect(0,0,w,h); return; }
+
+            canvasCtx.imageSmoothingEnabled = true; canvasCtx.imageSmoothingQuality = 'high';
+
+            // 更新所有的光圈插值与缓动
+            const spotLerp = 0.2; const radiusLerp = 0.15;
+            state.spots.forEach(spot => {
+                spot.targetX = w * 0.1 + spot.autoPanX * w * 0.8;
+                spot.targetY = h * 0.1 + spot.autoPanY * h * 0.8;
+                spot.currentX += (spot.targetX - spot.currentX) * spotLerp;
+                spot.currentY += (spot.targetY - spot.currentY) * spotLerp;
+                spot.currentRadius += (spot.targetRadius - spot.currentRadius) * radiusLerp;
+            });
+
+            // 获取所有激活的强光圈（过滤掉接近消失的）
+            const activeSpots = state.spots.filter(s => s.currentRadius > 5);
+
+            // 边缘触发推流：基于任何一个激活的光圈来移动视口
+            if (activeSpots.length > 0) {
+                const marginX = w * 0.20; const marginY = h * 0.20; const maxPanSpeed = 15 * dpr;
+                // 取第一个主光圈作为视口拉拽参考
+                const primarySpot = activeSpots[0];
+                if (primarySpot.currentX < marginX) state.targetPanX += (1 - primarySpot.currentX / marginX) * maxPanSpeed;
+                else if (primarySpot.currentX > w - marginX) state.targetPanX += -((primarySpot.currentX - (w - marginX)) / marginX) * maxPanSpeed;
+                if (primarySpot.currentY < marginY) state.targetPanY += (1 - primarySpot.currentY / marginY) * maxPanSpeed;
+                else if (primarySpot.currentY > h - marginY) state.targetPanY += -((primarySpot.currentY - (h - marginY)) / marginY) * maxPanSpeed;
+            }
+
+            let minX_log = Infinity, maxX_log = -Infinity, minY_log = Infinity, maxY_log = -Infinity;
+            state.mediaItems.forEach(item => {
+                const hw = (item.baseW * item.z) / 2; const hh = (item.baseH * item.z) / 2;
+                minX_log = Math.min(minX_log, item.x - hw); maxX_log = Math.max(maxX_log, item.x + hw);
+                minY_log = Math.min(minY_log, item.y - hh); maxY_log = Math.max(maxY_log, item.y + hh);
+            });
+
+            const minX_phys = minX_log * dpr; const maxX_phys = maxX_log * dpr;
+            const minY_phys = minY_log * dpr; const maxY_phys = maxY_log * dpr;
+
+            const contentW = maxX_phys - minX_phys; const contentH = maxY_phys - minY_phys;
+            if (contentW > 0 && contentH > 0) {
+                const minScaleRequired = Math.max(w / contentW, h / contentH);
+                state.targetScale = Math.max(state.targetScale, minScaleRequired);
+            }
+
+            const minAllowedPanX = w / 2 - maxX_phys * state.targetScale; const maxAllowedPanX = -w / 2 - minX_phys * state.targetScale;
+            if (minAllowedPanX <= maxAllowedPanX) state.targetPanX = Math.max(minAllowedPanX, Math.min(maxAllowedPanX, state.targetPanX));
+            else state.targetPanX = (minAllowedPanX + maxAllowedPanX) / 2; 
+
+            const minAllowedPanY = h / 2 - maxY_phys * state.targetScale; const maxAllowedPanY = -h / 2 - minY_phys * state.targetScale;
+            if (minAllowedPanY <= maxAllowedPanY) state.targetPanY = Math.max(minAllowedPanY, Math.min(maxAllowedPanY, state.targetPanY));
+            else state.targetPanY = (minAllowedPanY + maxAllowedPanY) / 2;
+
+            const scaleLerp = 0.1; const panLerp = 0.04;
+            state.currentScale += (state.targetScale - state.currentScale) * scaleLerp;
+            state.currentPanX += (state.targetPanX - state.currentPanX) * panLerp;
+            state.currentPanY += (state.targetPanY - state.currentPanY) * panLerp;
+
+            const sortedItems = [...state.mediaItems].sort((a, b) => a.z - b.z);
+
+            // 封装绘画素材方法
+            const drawAllItems = (doHoverCheck = false) => {
+                sortedItems.forEach(item => {
+                    const drawW = item.baseW * state.currentScale * item.z * dpr; const drawH = item.baseH * state.currentScale * item.z * dpr;
+                    const drawX = (w / 2) + state.currentPanX + (item.x * state.currentScale * dpr) - (drawW / 2);
+                    const drawY = (h / 2) + state.currentPanY + (item.y * state.currentScale * dpr) - (drawH / 2);
+
+                    // 多重光圈检测
+                    if (doHoverCheck) {
+                        item.isHovered = false;
+                        for (let spot of activeSpots) {
+                            let testX = spot.currentX; let testY = spot.currentY;
+                            if (spot.currentX < drawX) testX = drawX; else if (spot.currentX > drawX + drawW) testX = drawX + drawW;
+                            if (spot.currentY < drawY) testY = drawY; else if (spot.currentY > drawY + drawH) testY = drawY + drawH;
+
+                            const distX = spot.currentX - testX; const distY = spot.currentY - testY;
+                            const distance = Math.sqrt((distX*distX) + (distY*distY));
+                            if ((distance <= spot.currentRadius)) { item.isHovered = true; break; }
+                        }
+
+                        // 视频依赖光圈唤醒
+                        if (item.type === 'video') {
+                            if (item.isHovered && item.element.paused && !item.playPromise) {
+                                item.playPromise = item.element.play();
+                                if (item.playPromise !== undefined) item.playPromise.then(() => { item.playPromise = null; }).catch(() => { item.playPromise = null; });
+                            } else if (!item.isHovered && !item.element.paused && !item.playPromise) item.element.pause();
+                        }
+                    }
+
+                    if (item.type === 'audio') {
+                        canvasCtx.save();
+                        canvasCtx.translate(drawX + drawW/2, drawY + drawH/2);
+                        if (!item.element.paused) item.rotation += 0.02;
+                        canvasCtx.rotate(item.rotation);
+                        
+                        canvasCtx.beginPath(); canvasCtx.arc(0, 0, drawW/2, 0, Math.PI*2);
+                        canvasCtx.fillStyle = 'rgba(20,20,22,0.9)'; canvasCtx.fill();
+                        canvasCtx.lineWidth = 1 * dpr; canvasCtx.strokeStyle = 'rgba(255,255,255,0.1)'; canvasCtx.stroke();
+                        
+                        canvasCtx.beginPath(); canvasCtx.arc(0, 0, drawW/2 * 0.7, 0, Math.PI*2); canvasCtx.stroke();
+                        canvasCtx.beginPath(); canvasCtx.arc(0, 0, drawW/2 * 0.4, 0, Math.PI*2); canvasCtx.stroke();
+
+                        canvasCtx.beginPath(); canvasCtx.arc(0, 0, drawW/2 * 0.25, 0, Math.PI*2);
+                        canvasCtx.fillStyle = item.isHovered ? '#ffffff' : 'rgba(255,255,255,0.2)'; canvasCtx.fill();
+
+                        canvasCtx.beginPath(); canvasCtx.arc(0, 0, drawW/2 * 0.05, 0, Math.PI*2);
+                        canvasCtx.fillStyle = '#000000'; canvasCtx.fill();
+                        canvasCtx.restore();
+                    } else {
+                        canvasCtx.drawImage(item.element, drawX, drawY, drawW, drawH);
+                    }
+                });
+            };
+
+            // === 核心渲染管线：解决多重光效遮罩的完美融合 ===
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, w, h);
+
+            if (activeSpots.length > 0) {
+                // 1. 先正常绘制所有彩色画面
+                drawAllItems(true); // true 代表进行 hover 判断，计算视频的播放
+
+                // 2. 在离线画布上生成多重光圈的联合 Alpha 蒙版
+                maskCtx.clearRect(0, 0, w, h);
+                activeSpots.forEach(spot => {
+                    const gradient = maskCtx.createRadialGradient(
+                        spot.currentX, spot.currentY, 0,
+                        spot.currentX, spot.currentY, spot.currentRadius
+                    );
+                    gradient.addColorStop(0, 'rgba(0, 0, 0, 1)');
+                    gradient.addColorStop(0.5, 'rgba(0, 0, 0, 1)');
+                    gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+                    maskCtx.fillStyle = gradient; 
+                    maskCtx.beginPath(); 
+                    maskCtx.arc(spot.currentX, spot.currentY, spot.currentRadius, 0, Math.PI * 2); 
+                    maskCtx.fill();
+                });
+
+                // 3. 用蒙版裁剪主画布的彩色画面 (Destination-in 完美保留彩色重叠部分)
+                canvasCtx.globalCompositeOperation = 'destination-in';
+                canvasCtx.drawImage(maskCanvas, 0, 0);
+            }
+
+            // 4. 在底层铺上深色暗灰背景 (Destination-over)
+            canvasCtx.globalCompositeOperation = 'destination-over';
+            canvasCtx.filter = 'grayscale(100%) brightness(0.25)';
+            drawAllItems(false); 
+            canvasCtx.filter = 'none'; 
+            canvasCtx.globalCompositeOperation = 'source-over'; 
+
+            // --- 实体体积光 / 丁达尔特效 (Tyndall Scattering) ---
+            if (activeSpots.length > 0) {
+                canvasCtx.globalCompositeOperation = 'screen'; 
+                
+                activeSpots.forEach(spot => {
+                    const lx = w / 2 - (spot.currentX - w / 2) * 0.4; 
+                    const ly = h + 200 * dpr; 
+                    
+                    const cx = spot.currentX; const cy = spot.currentY; const R = spot.currentRadius;
+                    
+                    const dx = cx - lx; const dy = cy - ly;
+                    const dist = Math.sqrt(dx*dx + dy*dy);
+                    const nx = dx / dist; const ny = dy / dist;
+                    const px = -ny; const py = nx;  
+                    
+                    const p1x = cx + px * R; const p1y = cy + py * R;
+                    const p2x = cx - px * R; const p2y = cy - py * R;
+                    
+                    const beamGrad = canvasCtx.createLinearGradient(lx, ly, cx, cy);
+                    beamGrad.addColorStop(0, 'rgba(255, 255, 255, 0.15)'); 
+                    beamGrad.addColorStop(0.5, 'rgba(255, 255, 255, 0.08)'); 
+                    beamGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');    
+                    
+                    canvasCtx.fillStyle = beamGrad;
+                    canvasCtx.beginPath();
+                    canvasCtx.moveTo(lx, ly);
+                    canvasCtx.lineTo(p1x, p1y);
+                    canvasCtx.lineTo(p2x, p2y);
+                    canvasCtx.closePath();
+                    canvasCtx.fill();
+                    
+                    const glowGrad = canvasCtx.createRadialGradient(cx, cy, R * 0.5, cx, cy, R * 1.8);
+                    glowGrad.addColorStop(0, 'rgba(255, 255, 255, 0.12)');
+                    glowGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+                    
+                    canvasCtx.fillStyle = glowGrad;
+                    canvasCtx.beginPath();
+                    canvasCtx.arc(cx, cy, R * 1.8, 0, Math.PI * 2);
+                    canvasCtx.fill();
+                });
+            }
+
+            canvasCtx.restore();
+        }
+
+        window.addEventListener('load', () => { loadDefaultMedia(); renderLoop(); });
+    </script>
+</body>
+</html>
